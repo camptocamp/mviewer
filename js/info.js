@@ -134,7 +134,8 @@ var info = (function () {
      *
      */
 
-    var _queryMap = function (evt, options) { 
+    var _queryMap = function (evt, options) {
+        var isClick = evt.type === 'singleclick';
         _queriedFeatures = [];
         _firstlayerFeatures = [];
         var showPin = false;
@@ -251,6 +252,26 @@ var info = (function () {
 
         var requests = [];
         var carrousel=false;
+
+    /**
+     * This method test mime type from string content
+     * because of bad contentType on GetFeatureInfo response (QGIS SERVER)
+     * @param  {variant} content
+     * @param  {string} contentType (from GetFeatureInfo response header)
+     */
+    var _checkMimeType = function (content,contentType ) {
+        var mimeType = contentType.split(";")[0];
+        //Test string content to check if content is XML or HTML
+        if (typeof content === 'string') {
+            if (content.indexOf('<wfs:FeatureCollection') > 0 ) {
+                mimeType = "application/vnd.ogc.gml";
+            } else if (content.indexOf('<div') >= 0 ) {
+                mimeType = "text/html";
+            }
+        }
+        return mimeType;
+    }
+
         var callback = function (result) {
             $.each(featureInfoByLayer, function (index, response) {
                 var layerinfos = response.layerinfos;
@@ -260,6 +281,7 @@ var info = (function () {
                 }
                 var contentType = response.contenttype;
                 var layerResponse = response.response;
+                var mimeType = _checkMimeType(layerResponse, contentType);
                 var name = layerinfos.name;
                 var theme = layerinfos.theme;
                 var layerid = layerinfos.layerid;
@@ -272,7 +294,7 @@ var info = (function () {
                 var xml = null;
                 var html = null;
 
-                switch (contentType.split(";")[0]) {
+                switch (mimeType) {
                     case "text/html":
                         if ((typeof layerResponse === 'string')
                             && (layerResponse.search('<!--nodatadetect--><!--nodatadetect-->')<0)
@@ -318,16 +340,17 @@ var info = (function () {
                     if (xml) {
                         var getFeatureInfo = _parseWMSGetFeatureInfo(xml, layerid);
                         if(!getFeatureInfo.hasGeometry || !getFeatureInfo.features.length || !infohighlight) {
+                            // no geometry could be found in gml
                             showPin = true;
                         } else {
-                            // no geometry could be found in gml
+                            //Geometry is available
                             _queriedFeatures.push.apply(_queriedFeatures, getFeatureInfo.features);
-                            var features = getFeatureInfo.features;
-                            if (layerinfos.template) {
-                                html_result.push(applyTemplate(features, layerinfos));
-                            } else {
-                                html_result.push(createContentHtml(features, layerinfos));
-                            }
+                        }
+                        var features = getFeatureInfo.features;
+                        if (layerinfos.template) {
+                            html_result.push(applyTemplate(features, layerinfos));
+                        } else {
+                            html_result.push(createContentHtml(features, layerinfos));
                         }
                     }
                 }
@@ -407,7 +430,7 @@ var info = (function () {
                             return feature.ol_uid == e.relatedTarget.id;
                         })
                         mviewer.highlightSubFeature(selectedFeature[0]);
-                    });                    
+                    });
                     // change layer of sub selection
                     if (configuration.getConfiguration().mobile) {
                         $('.panel-heading').on('click', function (e) {
@@ -425,7 +448,7 @@ var info = (function () {
                 mviewer.highlightFeatures(_queriedFeatures);
                 mviewer.highlightSubFeature(_firstlayerFeatures[0]);
                 // show pin as fallback if no geometry for wms layer
-                if (showPin || (!_queriedFeatures.length && !_firstlayerFeatures.length)) {
+                if (showPin || (!_queriedFeatures.length && !_firstlayerFeatures.length && !isClick)) {
                     mviewer.showLocation(_projection.getCode(), _clickCoordinates[0], _clickCoordinates[1]);
                 } else {
                     $("#mv_marker").hide();
@@ -434,12 +457,11 @@ var info = (function () {
             $('#loading-indicator').hide();
             search.clearSearchField();
             _mvReady = true;
-
         };
 
         var changeSubFeatureLayer = function (e) {
             _firstlayerFeatures = _queriedFeatures.filter(feature => {
-                return feature.get("mviewerid") == e.currentTarget.dataset.layerid; 
+                return feature.get("mviewerid") == e.currentTarget.dataset.layerid;
             })
             mviewer.highlightSubFeature(_firstlayerFeatures[0]);
         }
@@ -495,9 +517,9 @@ var info = (function () {
         $("#map").css("cursor", "");
 
         var feature = _map.forEachFeatureAtPixel(pixel, function (feature, layer) {
-            if (!layer 
-                || layer.get('mviewerid') === 'featureoverlay' 
-                || layer.get('mviewerid') === 'selectoverlay' 
+            if (!layer
+                || layer.get('mviewerid') === 'featureoverlay'
+                || layer.get('mviewerid') === 'selectoverlay'
                 || layer.get('mviewerid') === 'subselectoverlay'
             ) {
                 return;
@@ -532,6 +554,12 @@ var info = (function () {
         });
         //hack to check if feature is yet overlayed
         var newFeature = false;
+        if(!feature) {
+            _featureTooltip.tooltip('hide');
+            $("#map").css("cursor", "");
+            _sourceOverlay.clear();
+            return;
+        }
         if (feature && _sourceOverlay.getFeatures().length > 0) {
             if (feature.getProperties() === _sourceOverlay.getFeatures()[0].getProperties()) {
                 newFeature = false;
@@ -578,7 +606,7 @@ var info = (function () {
 
     /**
      * Private Method: _parseWMSGetFeatureInfo used to parse GML response
-     from wms servers. Tries to use bbox as geometry if no geometry returned 
+     from wms servers. Tries to use bbox as geometry if no geometry returned
      * @ param xml {Geography Markup Language}
      */
     var _parseWMSGetFeatureInfo = function (xml, layerid) {
@@ -684,7 +712,7 @@ var info = (function () {
               fields_kv = [];
               keys = Object.keys(this);
               for (i = 0 ; i < keys.length ; i++ ) {
-                if (keys[i] == "fields_kv" || keys[i] == "serialized" 
+                if (keys[i] == "fields_kv" || keys[i] == "serialized"
                     || keys[i] === "feature_ol_uid" || keys[i] === "mviewerid" || typeof this[keys[i]] === "object") {
                   continue;
                 }
