@@ -333,7 +333,7 @@ mviewer = (function () {
                 center: _center,
                 enableRotation: _rotation,
                 zoom: _zoom,
-                extent: mapoptions.maxextent 
+                extent: mapoptions.maxextent
                     ? mapoptions.maxextent.split(",").map(function(item) {return parseFloat(item);})
                     : undefined
             })
@@ -512,10 +512,36 @@ mviewer = (function () {
      */
 
     var _initSelectOverlay = function () {
+        var default_selection_style = {
+            point: {
+                radius: "7",
+                fillcolor: "82, 98, 217",
+                opacity: "0.5",
+                strokecolor: "82, 98, 217",
+                strokewidth: "4"
+            },
+            line: {
+                opacity: "1",
+                strokecolor: "82, 98, 217",
+                strokewidth: "4"
+            },
+            polygon: {
+                fillcolor: "82, 98, 217",
+                opacity: "0.5",
+                strokecolor: "82, 98, 217",
+                strokewidth: "4"
+            }
+        };
+        var selection_style = {};
+        if (configuration.getConfiguration().styles && configuration.getConfiguration().styles.selectionstyle) {
+            selection_style = Object.assign({}, default_selection_style, configuration.getConfiguration().styles.selectionstyle);
+        } else {
+            selection_style = default_selection_style;
+        }
         _sourceSelectOverlay = new ol.source.Vector();
         _selectOverlayFeatureLayer = new ol.layer.Vector({
             source: _sourceSelectOverlay,
-            style: getSelectStyle.bind(this, '82, 98, 217', 4),
+            style: getSelectStyle.bind(this, selection_style),
             mviewerid: 'selectoverlay'
         });
         _map.addLayer(_selectOverlayFeatureLayer);
@@ -528,10 +554,36 @@ mviewer = (function () {
      */
 
     var _initSubSelectOverlay = function () {
+        var default_subselection_style = {
+            point: {
+                radius: "7",
+                fillcolor: "252, 186, 3",
+                opacity: "0.5",
+                strokecolor: "82, 98, 217",
+                strokewidth: "2"
+            },
+            line: {
+                opacity: "1",
+                strokecolor: "252, 186, 3",
+                strokewidth: "2"
+            },
+            polygon: {
+                fillcolor: "252, 186, 3",
+                opacity: "0.5",
+                strokecolor: "252, 186, 3",
+                strokewidth: "2"
+            }
+        };
+        var subselection_style = {};
+        if (configuration.getConfiguration().styles && configuration.getConfiguration().styles.subselectionstyle) {
+            subselection_style = Object.assign({}, default_subselection_style, configuration.getConfiguration().styles.subselectionstyle);
+        } else {
+            subselection_style = default_subselection_style;
+        }
         _sourceSubSelectOverlay = new ol.source.Vector();
         _subSelectOverlayFeatureLayer = new ol.layer.Vector({
             source: _sourceSubSelectOverlay,
-            style: getSelectStyle.bind(this, '252, 186, 3', 2),
+            style: getSelectStyle.bind(this, subselection_style),
             mviewerid: 'subselectoverlay'
         });
         _map.addLayer(_subSelectOverlayFeatureLayer);
@@ -864,7 +916,9 @@ mviewer = (function () {
                 $.each(_themes[theme.id].groups, function (id, group) {
                     var grp = {title: group.name, layers: [] };
                     $.each(group.layers, function (id, layer) {
-                        grp.layers.unshift(layer);
+                        if (layer.showintoc) {
+                            grp.layers.unshift(layer);
+                        }
                     });
                     groups.push(grp);
                 });
@@ -873,7 +927,10 @@ mviewer = (function () {
             //NO GROUPS
             } else {
                  $.each(_themes[theme.id].layers, function (id, layer) {
-                    reverse_layers.push(layer);
+                    if (layer.showintoc) {
+                        reverse_layers.push(layer);
+                    }
+
                 });
                 view.layers = reverse_layers.reverse();
                 view.cls = classes.join(" ");
@@ -1149,7 +1206,7 @@ mviewer = (function () {
         var layers = [];
         $.each(_overLayers, function (i, item) {
             var layerparams = [];
-            if (item.layer.getVisible()) {
+            if (item.layer.getVisible() && item.showintoc) {
                 layerparams.push(item.layerid);
                 if (item.type === "wms") {
                     //get current style if many styles
@@ -1210,7 +1267,8 @@ mviewer = (function () {
             }
 
             var l = false;
-            if (mviewer.getLayers()[layerIdOrName] && mviewer.getLayers()[layerIdOrName].layer) {
+            if (mviewer.getLayers()[layerIdOrName] && mviewer.getLayers()[layerIdOrName].showintoc
+                && mviewer.getLayers()[layerIdOrName].layer) {
                 //layerIdOrName is layerid
                 l =  mviewer.getLayers()[layerIdOrName].layer;
                 richLayer.layerid = layerIdOrName;
@@ -1294,7 +1352,7 @@ mviewer = (function () {
 
         var hideLayer = function (layerControler) {
             layerControler.checked = false;
-            if (layerControler.layer) {
+            if (layerControler.layer && layerControler.showintoc) {
                 layerControler.layer.setVisible(false);
             }
             layerControler.visiblebydefault = false;
@@ -1932,7 +1990,19 @@ mviewer = (function () {
             }
             linkParams.mode = $('input[name=mv-display-mode]:checked').val();
 
-            var url = window.location.href.split('#')[0].split('?')[0] + '?' + $.param(linkParams);
+            //Get extra params from API. Params has to begin with c_
+            let reg = /^c_(.*)/;
+            for (const [key, value] of Object.entries(API)) {
+                if (key.match(reg)) {
+                    linkParams[key] = encodeURIComponent(API[key]);
+                }
+            }
+
+            function params(data) {
+                return Object.keys(data).map(key => `${key}=${data[key]}`).join('&');
+            }
+
+            var url = window.location.href.split('#')[0].split('?')[0] + '?' + params(linkParams);
             $("#permalinklink").attr('href',url).attr("target", "_blank");
             $("#permaqr").attr("src","http://chart.apis.google.com/chart?cht=qr&chs=140x140&chl=" + encodeURIComponent(url));
             return url;
@@ -2028,11 +2098,14 @@ mviewer = (function () {
          *
          */
 
-        showLocation: function (proj,x, y) {
+        showLocation: function (proj,x, y, showMarker) {
             //marker
+            $("#mv_marker").hide();
             var ptResult = ol.proj.transform([x, y], proj, _projection.getCode());
-            _marker.setPosition(ptResult);
-            $("#mv_marker").show();
+            if(showMarker != false || showMarker === undefined) {
+                _marker.setPosition(ptResult);
+                $("#mv_marker").show();
+            }
             _map.render();
         },
 
@@ -2134,7 +2207,6 @@ mviewer = (function () {
          */
 
         sendToGeorchestra: function () {
-            console.log("test");
             var params = {
                 "services": [],
                 "layers" : []
@@ -2180,7 +2252,7 @@ mviewer = (function () {
         },
 
         addLayer: function (layer) {
-            if (!layer) {
+            if (!layer || !layer.showintoc) {
                 return;
             }
             if (layer.exclusive) {

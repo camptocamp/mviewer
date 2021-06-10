@@ -253,25 +253,46 @@ var info = (function () {
         var requests = [];
         var carrousel=false;
 
-    /**
-     * This method test mime type from string content
-     * because of bad contentType on GetFeatureInfo response (QGIS SERVER)
-     * @param  {variant} content
-     * @param  {string} contentType (from GetFeatureInfo response header)
-     */
-    var _checkMimeType = function (content,contentType ) {
-        var mimeType = contentType.split(";")[0];
-        //Test string content to check if content is XML or HTML
-        if (typeof content === 'string') {
-            if (content.indexOf('<wfs:FeatureCollection') > 0 ) {
-                mimeType = "application/vnd.ogc.gml";
-            } else if (content.indexOf('<div') >= 0 ) {
-                mimeType = "text/html";
+        /**
+         * This method test mime type from string content
+         * because of bad contentType on GetFeatureInfo response (QGIS SERVER)
+         * @param  {variant} content
+         * @param  {string} contentType (from GetFeatureInfo response header)
+         */
+        var _checkMimeType = function (content,contentType ) {
+            var mimeType = contentType.split(";")[0];
+            //Test string content to check if content is XML or HTML
+            if (typeof content === 'string') {
+                if (content.indexOf('<wfs:FeatureCollection') > 0 ) {
+                    mimeType = "application/vnd.ogc.gml";
+                } else if (content.indexOf('<div') >= 0 ) {
+                    mimeType = "text/html";
+                }
             }
+            return mimeType;
         }
-        return mimeType;
-    }
 
+        /**
+         * Order views layers according to map zindex order
+         * @param {Array} viewsLayers - contain each views and layers by view
+         * @returns array
+         */
+        var orderViewsLayersByMap = function (viewsLayers) {
+            var mapLayers = mviewer.getMap().getLayers().getArray();
+            mapLayers = mapLayers.map(l => l.getProperties().mviewerid).filter(l => l);
+
+            var mapLayersOrder = [];
+            viewsLayers.forEach(lv => {
+                mapLayersOrder[mapLayers.indexOf(lv.layerid)] = lv;
+            })
+            return mapLayersOrder.filter(f => f).reverse();
+        }
+
+        /**
+         * Return infos according to map click event behavior.
+         * This callback is return when all request are resolved (like promiseAll behavior)
+         * @param {object} result
+         */
         var callback = function (result) {
             $.each(featureInfoByLayer, function (index, response) {
                 var layerinfos = response.layerinfos;
@@ -347,10 +368,12 @@ var info = (function () {
                             _queriedFeatures.push.apply(_queriedFeatures, getFeatureInfo.features);
                         }
                         var features = getFeatureInfo.features;
-                        if (layerinfos.template) {
-                            html_result.push(applyTemplate(features, layerinfos));
-                        } else {
-                            html_result.push(createContentHtml(features, layerinfos));
+                        if (features.length > 0) {
+                            if (layerinfos.template) {
+                                html_result.push(applyTemplate(features, layerinfos));
+                            } else {
+                                html_result.push(createContentHtml(features, layerinfos));
+                            }
                         }
                     }
                 }
@@ -378,18 +401,17 @@ var info = (function () {
             mviewer.setInfoLayers(infoLayers);
 
             $.each(views, function (panel, view) {
-                if (views[panel].layers.length > 0){
-                        views[panel].layers[0].firstlayer=true;
-                        var template = "";
-                        if (configuration.getConfiguration().mobile) {
-                            template = Mustache.render(mviewer.templates.featureInfo.accordion, view);
-                        } else {
-                            template = Mustache.render(mviewer.templates.featureInfo[_panelsTemplate[panel]], view);
-                        }
-                        $("#"+panel+" .popup-content").append(template);
-                    //TODO reorder tabs like in theme panel
-
-                    var title = $("[href='#slide-"+panel+"-1']").closest("li").attr("title");
+                if (view.layers.length > 0){
+                    view.layers = orderViewsLayersByMap(views[panel].layers);
+                    view.layers[0].firstlayer=true;
+                    var template = "";
+                    if (configuration.getConfiguration().mobile) {
+                        template = Mustache.render(mviewer.templates.featureInfo.accordion, view);
+                    } else {
+                        template = Mustache.render(mviewer.templates.featureInfo[_panelsTemplate[panel]], view);
+                    }
+                    $("#"+panel+" .popup-content").append(template);
+                    var title = $( `a[href*='slide-${panel}-']` ).closest("li").attr("title")
                     $("#"+panel+" .mv-header h5").text(title);
 
                     if (configuration.getConfiguration().mobile) {
@@ -421,7 +443,7 @@ var info = (function () {
                     });
                     // init sub selection
                     _firstlayerFeatures = _queriedFeatures.filter(feature => {
-                        return feature.get("mviewerid") == views[panel].layers[0].layerid;
+                        return feature.get("mviewerid") == view.layers[0].layerid;
                     })
                     // change feature of sub selection
                     $('.carousel.slide').on('slide.bs.carousel', function (e) {
@@ -449,7 +471,7 @@ var info = (function () {
                 mviewer.highlightSubFeature(_firstlayerFeatures[0]);
                 // show pin as fallback if no geometry for wms layer
                 if (showPin || (!_queriedFeatures.length && !_firstlayerFeatures.length && !isClick)) {
-                    mviewer.showLocation(_projection.getCode(), _clickCoordinates[0], _clickCoordinates[1]);
+                    mviewer.showLocation(_projection.getCode(), _clickCoordinates[0], _clickCoordinates[1], !showPin ? search.options.banmarker : showPin);
                 } else {
                     $("#mv_marker").hide();
                 }
@@ -485,6 +507,7 @@ var info = (function () {
 
         // using $.when.apply() we can execute a function when all the requests
         // in the array have completed
+        // this is promiseAll equivalent
         $.when.apply(new ajaxFunction(), requests).done(function (result) {
             callback(result)
         });
@@ -694,9 +717,17 @@ var info = (function () {
 
     var applyTemplate = function (olfeatures, olayer) {
         var tpl = olayer.template;
+        var _json = function (str) {
+            var result = null;
+            try {
+                result = JSON.parse(str);
+            } catch (e) {
+                result = str;
+            }
+            return result;
+        };
         var obj = {features: []};
         var activeAttributeValue = false;
-        var geojson = new ol.format.GeoJSON();
         // if attributeControl is used for this layer, get the active attribute value and
         // set this value as property like 'value= true'. This allows use this value in Mustache template
         if (olayer.attributefilter && olayer.layer.getSource().getParams()['CQL_FILTER']) {
@@ -704,31 +735,42 @@ var info = (function () {
             activeAttributeValue = activeFilter.split(olayer.attributeoperator).map(e=>e.replace(/[\' ]/g, ''))[1];
         }
         olfeatures.forEach(function(feature){
+            olayer.jsonfields.forEach(function (fld) {
+                if (feature.get(fld)) {
+                    var json = _json(feature.get(fld));
+                    // convert String value to JSON value
+                    // Great for use in Mustache template
+                    feature.set(fld,json);
+                }
+            });
             if (activeAttributeValue) {
                 feature.set(activeAttributeValue, true);
             }
-            // add a key_value array with all the fields, allowing to iterate through all fields in a mustache templaye
+            var geometryName = feature.getGeometryName();
+            var excludedPropNames = ['fields_kv', 'serialized', 'feature_ol_uid', 'mviewerid', geometryName];
+            var extractFeaturePropertiesFn = function (properties) {
+                return Object.keys(properties).reduce((filteredProps, propertyName) => {
+                    var value = properties[propertyName];
+                    if (!excludedPropNames.includes(propertyName) && typeof value !== 'object') {
+                        filteredProps[propertyName] = value;
+                    }
+                    return filteredProps;
+                }, {});
+            }
+
+            // add a key_value array with all the fields, allowing to iterate through all fields in a mustache template
             var fields_kv = function () {
-              fields_kv = [];
-              keys = Object.keys(this);
-              for (i = 0 ; i < keys.length ; i++ ) {
-                if (keys[i] == "fields_kv" || keys[i] == "serialized"
-                    || keys[i] === "feature_ol_uid" || keys[i] === "mviewerid" || typeof this[keys[i]] === "object") {
-                  continue;
-                }
-                field_kv = {
-                  'key': keys[i],
-                  'value': this[keys[i]]
-                }
-                fields_kv.push(field_kv);
-              }
-              return fields_kv;
+                var properties = extractFeaturePropertiesFn(this);
+                return Object.entries(properties).map(([key, value]) => {
+                    return {key, value};
+                })
             }
             feature.setProperties({'fields_kv': fields_kv});
             // add a serialized version of the object so it can easily be passed through HTML GET request
-            // you can deserialize it with `JSON.parse(data)` when data is the serialized data
+            // you can deserialize it with `JSON.parse(decodeURIComponent(feature.getProperties().serialized()))`
+            // when data is the serialized data
             var serialized = function () {
-              return encodeURIComponent(geojson.writeFeature(feature));
+                return encodeURIComponent(JSON.stringify(extractFeaturePropertiesFn(feature.getProperties())));
             }
             feature.setProperties({'serialized': serialized})
             // attach ol_uid to identify feature in DOM (not all features have a feature id as property)
@@ -797,7 +839,7 @@ var info = (function () {
         }
         _sourceOverlay = mviewer.getSourceOverlay();
         $.each(_overLayers, function (i, layer) {
-            if (layer.queryable) {
+            if (layer.queryable && layer.showintoc) {
                 _addQueryableLayer(layer);
             }
         });
